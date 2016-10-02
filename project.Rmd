@@ -1,0 +1,133 @@
+# Peer-graded Assignment for "Practical Machine Learning"
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+## Looking at the data
+
+Setup R session, load dataset and summarize:
+
+```{r echo=FALSE}
+load("./project.Rdata")
+library("caret")
+```
+
+```{r eval=FALSE}
+set.seed(1234)
+library("caret")
+fullDS <- read.csv(gzfile("./pml-training.csv.gz"))
+```
+
+```{r}
+summary(fullDS)
+```
+
+
+Looking at the dataset, we see some columns are able to uniquely identify samples, so we remove them:
+
+```{r eval=FALSE}
+fullDS <- fullDS[,!(names(fullDS) %in% c("X", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "user_name", "new_window", "num_window"))]
+```
+
+We need to coerce the categoricals to factors, and force everything else as numeric. Since some predictors are sparse, this tricks R CSV loader into coercing those as factors.
+
+```{r eval=FALSE}
+newDS <- as.data.frame(lapply(fullDS, as.numeric))
+newDS$classe <- as.factor(fullDS$classe)
+fullDS <- newDS
+```
+
+Let's split into train/test, based on the target, to have an equal proportion of classes between the datasets:
+
+```{r eval=FALSE}
+trainIdx <- createDataPartition(fullDS$classe, p=.7, list=FALSE, times=1)
+trainingDS <- fullDS[trainIdx,]
+testingDS <- fullDS[-trainIdx,]
+```
+
+## Pre-processing
+
+Identifying predictors w/ a single value, or few unique values, that might cause overfitting to train/test split and limit our chances of generalizing:
+
+```{r eval=FALSE}
+problematicVars <- nearZeroVar(trainingDS)
+```
+
+The dataset contains `r length(sapply(trainingDS, is.numeric))` continuous predictors, `r length(problematicVars)` problematic predictors and `r sum(is.na(trainingDS))` missing predictors. Since we plan on training a tree model, we can impute the median to have equal chance of spliting at a leaf for any sample. We also handle near zero values.
+
+```{r eval=FALSE}
+ppM <- preProcess(trainingDS, method=c("nzv", "medianImpute"))
+trainingPP <- predict(ppM, trainingDS)
+testingPP <- predict(ppM, testingDS)
+```
+
+We now have `r length(names(trainingPP))` predictors.
+
+## Model
+
+Let's train a quick classification tree and check performance on testing to serve as baseline:
+
+```{r eval=FALSE}
+m1 <- train(classe ~ ., data=trainingPP, method="rpart")
+```
+
+```{r}
+m1
+```
+
+```{r}
+m1P <- predict(m1, testingPP)
+confusionMatrix(m1P, testingPP$classe)
+```
+
+Baseline accuracy is average. Let's see how can we can improve.
+
+Selecting Random Forest model w/ K-fold:
+
+```{r eval=FALSE}
+fitControl <- trainControl(method="cv", number=3, allowParallel = TRUE, verboseIter = TRUE)
+m2 <- train(classe ~ ., data=trainingPP, method="rf", trControl=fitControl, verbose = TRUE)
+```
+
+```{r}
+m2
+```
+
+
+Accuracy on cross-validation for this model is `r mean(m2$results$Accuracy)` / `r max(m2$results$Accuracy)` (mean/max). Let's plot how accuracy evolves w/ CV:
+
+```{r}
+plot(m2)
+```
+
+Let's compare w/ accuracy on held-out data:
+
+```{r}
+m2P <- predict(m2, testingPP)
+confusionMatrix(m2P, testingPP$classe)
+```
+
+## Conclusion
+
+Accuracy on held-out data is inline w/ cross-validation accuracy, which is a good sign this model is generalizing. Accuracy is also well behaved across classes, which is important since this is a multiclass problem.
+
+## Final predictions
+
+```{r}
+quizDS <- read.csv(gzfile("./pml-testing.csv.gz"))
+quizDS <- as.data.frame(lapply(quizDS, as.numeric))
+quizPP <- predict(ppM, quizDS)
+quizPreds <- predict(m2, quizPP)
+data.frame(preds=quizPreds, problem_id=quizPP$problem_id)
+```
